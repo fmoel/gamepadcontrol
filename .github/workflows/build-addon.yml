@@ -14,6 +14,7 @@ jobs:
       BLENDER_RELEASE_URL: "https://download.blender.org/release/Blender5.0/blender-5.0.0-linux-x64.tar.xz"
       BLENDER_ARCHIVE: "blender-5.0.0-linux-x64.tar.xz"
       BLENDER_DIR_NAME: "blender-5.0.0-linux-x64"
+      OUTPUT_DIR: ${{ runner.temp }}/addon_dist
 
     steps:
       - name: Checkout repository
@@ -26,7 +27,7 @@ jobs:
 
       - name: Determine archive path
         id: archive
-        run: echo "path=dist/${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}.zip" >> "$GITHUB_OUTPUT"
+        run: echo "path=$OUTPUT_DIR/${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Install Blender CLI
         run: |
@@ -36,8 +37,8 @@ jobs:
 
       - name: Build package
         run: |
-          mkdir -p dist
-          "$BLENDER_BIN" --command extension build --output-dir dist
+          mkdir -p "$OUTPUT_DIR"
+          "$BLENDER_BIN" --command extension build --output-dir "$OUTPUT_DIR"
 
       - name: Validate package metadata
         run: |
