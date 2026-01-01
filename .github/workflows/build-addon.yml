@@ -21,6 +21,7 @@ jobs:
 
       - name: Configure build paths
         run: |
+          echo "BUILD_DIR=$RUNNER_TEMP/addon_zip" >> "$GITHUB_ENV"
           echo "OUTPUT_DIR=$RUNNER_TEMP/addon_dist" >> "$GITHUB_ENV"
 
       - name: Extract manifest metadata
@@ -30,7 +31,7 @@ jobs:
 
       - name: Determine archive path
         id: archive
-        run: echo "path=$OUTPUT_DIR/${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}.zip" >> "$GITHUB_OUTPUT"
+        run: echo "path=$BUILD_DIR/${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Install Blender CLI
         run: |
@@ -40,16 +41,22 @@ jobs:
 
       - name: Build package
         run: |
-          mkdir -p "$OUTPUT_DIR"
-          "$BLENDER_BIN" --command extension build --output-dir "$OUTPUT_DIR"
+          mkdir -p "$BUILD_DIR"
+          "$BLENDER_BIN" --command extension build --output-dir "$BUILD_DIR"
 
       - name: Validate package metadata
         run: |
           "$BLENDER_BIN" --command extension validate "${{ steps.archive.outputs.path }}"
 
+      - name: Prepare artifact directory
+        run: |
+          rm -rf "$OUTPUT_DIR"
+          mkdir -p "$OUTPUT_DIR"
+          unzip -q "${{ steps.archive.outputs.path }}" -d "$OUTPUT_DIR"
+
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}
-          path: ${{ steps.archive.outputs.path }}
+          path: ${{ env.OUTPUT_DIR }}
           if-no-files-found: error
