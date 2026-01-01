@@ -13,7 +13,7 @@ jobs:
       BLENDER_VERSION: "5.0.0"
       BLENDER_RELEASE_URL: "https://download.blender.org/release/Blender5.0/blender-5.0.0-linux-x64.tar.xz"
       BLENDER_ARCHIVE: "blender-5.0.0-linux-x64.tar.xz"
-      BLENDER_DIR: "blender-5.0.0-linux-x64"
+      BLENDER_DIR_NAME: "blender-5.0.0-linux-x64"
 
     steps:
       - name: Checkout repository
@@ -30,14 +30,18 @@ jobs:
 
       - name: Install Blender CLI
         run: |
-          curl -L "$BLENDER_RELEASE_URL" -o "$BLENDER_ARCHIVE"
-          tar -xf "$BLENDER_ARCHIVE"
+          curl -L "$BLENDER_RELEASE_URL" -o "$RUNNER_TEMP/$BLENDER_ARCHIVE"
+          tar -xf "$RUNNER_TEMP/$BLENDER_ARCHIVE" -C "$RUNNER_TEMP"
+          echo "BLENDER_BIN=$RUNNER_TEMP/$BLENDER_DIR_NAME/blender" >> "$GITHUB_ENV"
 
-      - name: Build and validate package
+      - name: Build package
         run: |
           mkdir -p dist
-          "./$BLENDER_DIR/blender" --command extension build --output-dir dist
-          "./$BLENDER_DIR/blender" --command extension validate "${{ steps.archive.outputs.path }}"
+          "$BLENDER_BIN" --command extension build --output-dir dist
+
+      - name: Validate package metadata
+        run: |
+          "$BLENDER_BIN" --command extension validate "${{ steps.archive.outputs.path }}"
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
