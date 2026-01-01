@@ -14,11 +14,14 @@ jobs:
       BLENDER_RELEASE_URL: "https://download.blender.org/release/Blender5.0/blender-5.0.0-linux-x64.tar.xz"
       BLENDER_ARCHIVE: "blender-5.0.0-linux-x64.tar.xz"
       BLENDER_DIR_NAME: "blender-5.0.0-linux-x64"
-      OUTPUT_DIR: ${{ runner.temp }}/addon_dist
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Configure build paths
+        run: |
+          echo "OUTPUT_DIR=$RUNNER_TEMP/addon_dist" >> "$GITHUB_ENV"
 
       - name: Extract manifest metadata
         id: manifest
