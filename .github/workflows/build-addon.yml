@@ -9,90 +9,39 @@ on:
 jobs:
   package:
     runs-on: ubuntu-latest
+    env:
+      BLENDER_VERSION: "5.0.0"
+      BLENDER_RELEASE_URL: "https://download.blender.org/release/Blender5.0/blender-5.0.0-linux-x64.tar.xz"
+      BLENDER_ARCHIVE: "blender-5.0.0-linux-x64.tar.xz"
+      BLENDER_DIR: "blender-5.0.0-linux-x64"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Package add-on
-        id: package
-        shell: bash
+      - name: Extract manifest metadata
+        id: manifest
         run: |
-          python - <<'PY'
-    import os
-    import zipfile
-    from pathlib import Path, PurePosixPath
+          python -c "import tomllib, pathlib; data = tomllib.loads(pathlib.Path('blender_manifest.toml').read_text(encoding='utf-8')); print('addon_id=' + data['id']); print('version=' + data['version'])" | tee -a "$GITHUB_OUTPUT"
 
-    try:
-      import tomllib
-    except ModuleNotFoundError:  # Python < 3.11 fallback
-      import tomli as tomllib
+      - name: Determine archive path
+        id: archive
+        run: echo "path=dist/${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}.zip" >> "$GITHUB_OUTPUT"
 
-    root = Path('.').resolve()
-    manifest = tomllib.loads(root.joinpath('blender_manifest.toml').read_text(encoding='utf-8'))
-    addon_id = manifest['id']
-    version = manifest['version']
+      - name: Install Blender CLI
+        run: |
+          curl -L "$BLENDER_RELEASE_URL" -o "$BLENDER_ARCHIVE"
+          tar -xf "$BLENDER_ARCHIVE"
 
-    raw_patterns = manifest.get('build', {}).get('paths_exclude_pattern', [])
-    raw_patterns += ['.git/', '.github/', 'dist/', '*.zip']
-
-    def expand_pattern(pattern: str) -> list[str]:
-      normalized = pattern.replace('\\', '/').strip()
-      if not normalized:
-        return []
-      rooted = normalized.startswith('/')
-      normalized = normalized.lstrip('/')
-      is_dir = normalized.endswith('/')
-      normalized = normalized.rstrip('/')
-      if not normalized:
-        return []
-      base = normalized
-      if not rooted:
-        base = f"**/{base}"
-      patterns = [base]
-      if is_dir:
-        patterns.append(f"{base}/**")
-      return patterns
-
-    compiled_patterns = []
-    for raw in raw_patterns:
-      compiled_patterns.extend(expand_pattern(raw))
-
-    def is_excluded(rel_path: Path) -> bool:
-      if rel_path == Path('.'):
-        return False
-      rel_posix = rel_path.as_posix()
-      posix_path = PurePosixPath(rel_posix)
-      return any(posix_path.match(pattern) for pattern in compiled_patterns)
-
-    dist = root / 'dist'
-    dist.mkdir(exist_ok=True)
-    archive_path = dist / f"{addon_id}-{version}.zip"
-
-    with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as archive:
-      for current_root, dirnames, filenames in os.walk(root):
-        current_root_path = Path(current_root)
-        rel_dir = current_root_path.relative_to(root)
-        if is_excluded(rel_dir):
-          dirnames[:] = []
-          continue
-        dirnames[:] = [d for d in dirnames if not is_excluded((rel_dir / d))]
-        for filename in filenames:
-          file_path = current_root_path / filename
-          rel_path = file_path.relative_to(root)
-          if is_excluded(rel_path):
-            continue
-          archive.write(file_path, rel_path.as_posix())
-
-    with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as gh:
-      gh.write(f"addon_id={addon_id}\n")
-      gh.write(f"version={version}\n")
-      gh.write(f"archive={archive_path.as_posix()}\n")
-PY
+      - name: Build and validate package
+        run: |
+          mkdir -p dist
+          "./$BLENDER_DIR/blender" --command extension build --output-dir dist
+          "./$BLENDER_DIR/blender" --command extension validate "${{ steps.archive.outputs.path }}"
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.addon_id }}-${{ steps.package.outputs.version }}
-          path: ${{ steps.package.outputs.archive }}
+          name: ${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}
+          path: ${{ steps.archive.outputs.path }}
           if-no-files-found: error

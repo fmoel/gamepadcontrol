@@ -1,8 +1,10 @@
-# Gamepad Controller
+# Gamepad Control
 
 _for Blender_
 
-**Gamepad Controller** is a Blender add-on that lets you use a game controller or gamepad to navigate and control the 3D viewport in real-time. It provides intuitive camera controls, view manipulation, and customizable gamepad modes that make working in Blender more comfortable and efficient.
+**Gamepad Control** is a Blender add-on that lets you use a game controller or gamepad to navigate and control the 3D viewport in real-time. It provides intuitive camera controls, view manipulation, and customizable gamepad modes that make working in Blender more comfortable and efficient.
+
+![Gamepad overlay in the View3D](assets/Screenshot%20overlay.png)
 
 ## Features
 
@@ -14,6 +16,14 @@ _for Blender_
 - Configurable button and axis mappings
 - Export/import settings for sharing configurations
 - Custom icon support for better visual feedback
+
+![Status indicator at the top of the View3D](assets/Screenshot%20status%20indicator.png)
+
+![Preferences for the gamepad control add-on](assets/Screenshot%20Preferences.png)
+
+Configuration can be done in Preferences -> Input -> Gamepad
+
+Tested currently on Windows-x64 with a PS5 controller
 
 ## Installation
 
@@ -33,7 +43,7 @@ _for Blender_
 
 ### Configuration
 
-1. Go to **Edit > Preferences > Add-ons** and find **Gamepad Controller**
+1. Go to **Edit > Preferences > Input** and find **Gamepad**
 2. Expand the addon preferences to configure:
    - Gamepad modes (create multiple control schemes)
    - Button and axis mappings
@@ -48,7 +58,7 @@ Access gamepad controls from the **View** menu in the 3D viewport:
 - Toggle Gamepad Overlay
 - Toggle Mode Indicator
 
-## Project Inspired By
+## Extension Inspired By
 
 BCL - Blender Controller Link  
 [https://github.com/globglob3D/Blender_Controller_Link](https://github.com/globglob3D/Blender_Controller_Link)
