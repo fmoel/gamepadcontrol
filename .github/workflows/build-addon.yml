@@ -5,9 +5,20 @@ on:
   push:
     tags:
       - "v*"
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   package:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
     env:
       BLENDER_VERSION: "5.0.0"
@@ -28,6 +39,15 @@ jobs:
         id: manifest
         run: |
           python -c "import tomllib, pathlib; data = tomllib.loads(pathlib.Path('blender_manifest.toml').read_text(encoding='utf-8')); print('addon_id=' + data['id']); print('version=' + data['version'])" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Determine artifact name
+        id: artifact-name
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "name=${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}-pr-${{ github.event.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Determine archive path
         id: archive
@@ -57,6 +77,25 @@ jobs:
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.manifest.outputs.addon_id }}-${{ steps.manifest.outputs.version }}
+          name: ${{ steps.artifact-name.outputs.name }}
           path: ${{ env.OUTPUT_DIR }}
           if-no-files-found: error
+
+  cleanup-artifacts:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    steps:
+      - name: Remove artifacts for merged PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_SUFFIX: -pr-${{ github.event.number }}
+        run: |
+          set -euo pipefail
+          artifacts=$(gh api repos/${{ github.repository }}/actions/artifacts --paginate | jq -r '.artifacts[] | select(.name | endswith(env.PR_SUFFIX)) | .id')
+          if [ -z "$artifacts" ]; then
+            echo "No artifacts to delete for PR${PR_SUFFIX}" && exit 0
+          fi
+          for artifact_id in $artifacts; do
+            gh api repos/${{ github.repository }}/actions/artifacts/$artifact_id -X DELETE >/dev/null
+            echo "Deleted artifact $artifact_id"
+          done
