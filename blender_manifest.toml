@@ -15,7 +15,7 @@ website = "https://github.com/fmoel/gamepadcontrol"
 
 # Optional list defined by Blender and server, see:
 # https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
-tags = ["System", "Scene", "User Interface", "3D View"]
+tags = ["System", "User Interface"]
 
 blender_version_min = "5.0.0"
 # # Optional: Blender version that the extension does not support, earlier versions are supported.
