@@ -17,7 +17,7 @@
 
 import bpy
 
-from .controller_actions import controller_actions
+from .controller_actions import get_controller_actions
 from .sdl_handler import create_reader
 from .sdl_handler import SDL2_Controller_Handler
 
@@ -32,7 +32,7 @@ class CL_OT_ControllerInputs(bpy.types.Operator):
 
     def modal(self, context, event):
         if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
-            controller_actions.notify_mouse_move(event, context)
+            get_controller_actions().notify_mouse_move(event, context)
         if event.type == 'TIMER':
             CL_OT_ControllerInputs.sdl2_controller_handler.poll(context)
         wm = context.window_manager
@@ -67,7 +67,7 @@ class CL_OT_ControllerInputs(bpy.types.Operator):
 
         wm.cl_controller_running = False
 
-        controller_actions.reset(context)
+        get_controller_actions().reset(context)
 
         self.report({'INFO'}, "Gamepad stopped")
 

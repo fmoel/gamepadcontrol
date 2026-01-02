@@ -41,20 +41,15 @@ class CL_UL_GamepadModes(UIList):
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         mode: GamepadModeSettings = item
-        if self.layout_type in {'DEFAULT', 'COMPACT'}:
-            row = layout.row(align=True)
-            row.prop(mode, "use_mode", text="")
-            row.prop(mode, "name", text="", emboss=False)
-            status_map = {
-                'ACTIVE': "Active",
-                'ENABLED': "Enabled",
-                'DISABLED': "Disabled",
-            }
-            row.label(text=status_map.get(getattr(mode, "ui_status", 'ENABLED'), ""))
-        elif self.layout_type == 'GRID':
-            layout.alignment = 'CENTER'
-            layout.enabled = bool(getattr(mode, "use_mode", True))
-            layout.label(text=mode.name)
+        row = layout.row(align=True)
+        row.prop(mode, "use_mode", text="")
+        row.prop(mode, "name", text="", emboss=False)
+        status_map = {
+            'ACTIVE': "Active",
+            'ENABLED': "Enabled",
+            'DISABLED': "Disabled",
+        }
+        row.label(text=status_map.get(getattr(mode, "ui_status", 'ENABLED'), ""))
 
 
 class CL_OT_GamepadModeAdd(Operator):
@@ -225,23 +220,25 @@ def draw_preferences_ui(prefs: CL_GamepadPreferences, layout, context) -> None:
         return
     mode = prefs.modes[prefs.modes_index]
     box = layout.box()
-    box.prop(mode, "name")
     col = box.column(align=True)
+    col.use_property_split = True
+    col.use_property_decorate = False
+    col.prop(mode, "name")
+    col.separator()
     
     # Back button with optional target mode
-    row = col.row(align=True)
-    row.prop(mode, "controller_button_back", text="Back")
+    col.prop(mode, "controller_button_back", text="Back")
     if mode.controller_button_back == 'TEMP_MODE_SHIFT':
-        row.prop_search(mode, "controller_button_back_extra", prefs, "modes", text="", icon='NONE')
+        col.prop_search(mode, "controller_button_back_extra", prefs, "modes", text="Temporary Mode", icon='NONE')
+        col.separator()
     
     # Start button with optional target mode
-    row = col.row(align=True)
-    row.prop(mode, "controller_button_start", text="Start")
+    col.prop(mode, "controller_button_start", text="Start")
     if mode.controller_button_start == 'TEMP_MODE_SHIFT':
-        row.prop_search(mode, "controller_button_start_extra", prefs, "modes", text="", icon='NONE')
+        col.prop_search(mode, "controller_button_start_extra", prefs, "modes", text="Temporary Mode", icon='NONE')
+        col.separator()
     
     columns = box.row()
-    columns.scale_y = 1.0
     left_col = columns.column()
     right_col = columns.column()
     _draw_side(left_col.box(), mode.left_side, "Left Side (D-Pad / Left Stick)")
@@ -250,7 +247,9 @@ def draw_preferences_ui(prefs: CL_GamepadPreferences, layout, context) -> None:
 
 def _draw_side(layout, side: GamepadSideSettings, title: str) -> None:
     layout.label(text=title)
-    button_column = layout.column(align=True)
+    col = layout.column(align=True)
+    col.use_property_split = True
+    col.use_property_decorate = False
     
     # Get preferences for mode selection
     prefs = get_addon_preferences()
@@ -278,9 +277,6 @@ def _draw_side(layout, side: GamepadSideSettings, title: str) -> None:
         ]
     
     for attr, label in button_fields:
-        row = button_column.row(align=True)
-        row.prop(side, attr, text=label)
-        
         # Show target mode selector if action is TEMP_MODE_SHIFT
         action_value = getattr(side, attr, 'NONE')
         if action_value == 'TEMP_MODE_SHIFT':
@@ -289,7 +285,12 @@ def _draw_side(layout, side: GamepadSideSettings, title: str) -> None:
                 extra_attr = "trigger_extra"
             else:
                 extra_attr = f"{attr}_extra"
-            row.prop_search(side, extra_attr, prefs, "modes", text="", icon='NONE')
+            col.separator()
+            col.prop(side, attr, text=label)
+            col.prop_search(side, extra_attr, prefs, "modes", text="Temporary Mode", icon='NONE')
+            col.separator()
+        else:
+            col.prop(side, attr, text=label)
     axis_box = layout
     axis_box.use_property_split = True
     axis_box.use_property_decorate = False
@@ -340,7 +341,9 @@ def _draw_axis_action_settings(layout, axis: GamepadAxisSettings, action_id: str
         layout.prop(axis, "dolly_speed", text="Move Speed")
     elif action_id in {'PAN_LR', 'PAN_UD'}:
         layout.prop(axis, "pan_speed", text="Pan Speed")
-    elif action_id in {'ROTATE_LOCAL_X', 'ROTATE_LOCAL_Y', 'ORBIT_LR', 'ORBIT_UD'}:
+    elif action_id in {'ROTATE_LOCAL_X', 'ROTATE_LOCAL_Y'}:        
+        layout.prop(axis, "rotate_speed", text="Rotate Speed")
+    elif action_id in {'ORBIT_LR', 'ORBIT_UD'}:
         layout.prop(axis, "orbit_speed", text="Orbit Speed")
 
 

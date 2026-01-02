@@ -25,9 +25,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, PointerProperty,
                        StringProperty)
 
-from . import enablement
-
-ADDON_PACKAGE = __package__ or __name__
+ADDON_PACKAGE = __package__
 
 BUTTON_ACTION_ITEMS: List[Tuple[str, str, str, int]] = [
     ("NONE", "None", "Action disabled", 0),
@@ -312,19 +310,16 @@ class CL_GamepadPreferences(AddonPreferences):
         name="Auto Connect",
         description="Automatically start the controller listener when Blender loads",
         default=True,
-        update=lambda self, context: self._update_enable_state(context),
     )
     show_mode_display_on_startup: BoolProperty(
         name="Show Mode Display on Startup",
         description="Display the gamepad mode text in the 3D View header when Blender opens",
         default=True,
-        update=lambda self, context: self.apply_display_preferences(context),
     )
     show_info_overlay_on_startup: BoolProperty(
         name="Show Info Overlay on Startup",
         description="Show the controller info overlay in the 3D View when Blender opens",
         default=False,
-        update=lambda self, context: self.apply_display_preferences(context),
     )
     modes: CollectionProperty(type=GamepadModeSettings)
     modes_index: IntProperty(name="Active Mode", default=0, min=0)
@@ -449,9 +444,6 @@ class CL_GamepadPreferences(AddonPreferences):
         mode.controller_button_back = template.get("controller_button_back", 'NONE')
         mode.controller_button_start = template.get("controller_button_start", 'NONE')
 
-    def _update_enable_state(self, context):
-        enablement.request_enable_state(bool(self.enable))
-
     def apply_display_preferences(self, context=None):
         if context is None:
             context = bpy.context
@@ -485,12 +477,12 @@ class CL_GamepadPreferences(AddonPreferences):
     def _detect_active_mode_index(self) -> Optional[int]:
         try:
             from .enablement import is_controller_running  # Local import to avoid cycles
-            from .controller_actions import controller_actions
+            from .controller_actions import get_controller_actions
         except Exception:
             return None
         if not is_controller_running():
             return None
-        return getattr(controller_actions, "mode_index", None)
+        return getattr(get_controller_actions(), "mode_index", None)
 
     def update_mode_statuses(self, active_index: Optional[int] = None) -> None:
         if not self.modes:
@@ -683,7 +675,6 @@ def get_addon_preferences(context=None) -> Optional[CL_GamepadPreferences]:
     addon_ids = {
         ADDON_PACKAGE,
         getattr(CL_GamepadPreferences, "bl_idname", None),
-        __name__.split(".", 1)[0],
     }
 
     for addon_id in addon_ids:

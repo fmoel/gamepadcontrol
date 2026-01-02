@@ -19,7 +19,7 @@ import time
 
 import bpy
 import sdl2
-from .controller_actions import controller_actions
+from .controller_actions import get_controller_actions
 
 
 def get_reader():
@@ -174,7 +174,7 @@ class SDL2_Controller_Handler:
         cl_reader.location = cl_reader.location
 
         if context:
-            controller_actions.apply(context, cl_reader)
+            get_controller_actions().apply(context, cl_reader)
 
 
 __all__ = ["SDL2_Controller_Handler", "get_reader", "create_reader", "ensure_prop_range"]

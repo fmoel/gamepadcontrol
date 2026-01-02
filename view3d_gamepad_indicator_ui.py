@@ -21,7 +21,7 @@ from typing import Optional
 
 import bpy
 
-from .controller_actions import controller_actions
+from .controller_actions import get_controller_actions
 from .preferences import get_addon_preferences, get_enabled_mode_indices
 from .view3d_overlay_ui import build_gamepad_snapshot
 
@@ -42,7 +42,7 @@ class VIEW3D_PT_gamepad_status(bpy.types.Panel):
 
         wm = context.window_manager
         running = getattr(wm, "cl_controller_running", False)
-        active_index = controller_actions.mode_index if running else None
+        active_index = get_controller_actions().mode_index if running else None
         prefs.update_mode_statuses(active_index=active_index)
 
         mode_col = layout.column(align=True)

@@ -190,6 +190,21 @@ class ControllerActionExecutor:
         self._process_trigger(trigger_key, mode, side.trigger_action, side)
         self._process_axes(axis_keys, mode, side.axis)
 
+    def _set_overlay_visibility(self, enabled: bool):
+        """Helper to toggle the overlay window-manager property and force a redraw."""
+        context = self._context if self._context else bpy.context
+        wm = getattr(context, "window_manager", None)
+        if not wm or not hasattr(wm, "cl_show_gamepad_overlay"):
+            return
+        if bool(wm.cl_show_gamepad_overlay) == bool(enabled):
+            return
+        wm.cl_show_gamepad_overlay = bool(enabled)
+        try:
+            from . import view3d_overlay_ui
+            view3d_overlay_ui.sync_overlay_state(context=context)
+        except Exception:
+            pass
+
     def _process_button_action(self, button, mode, action, side=None):
         if action == 'NONE' or not button:
             return
@@ -508,24 +523,21 @@ class ControllerActionExecutor:
         if pressed == previous:
             return
         self.button_state[reader_key] = pressed
-        
+
+        wm = getattr(self._context, "window_manager", None)
+        current_visibility = bool(getattr(wm, "cl_show_gamepad_overlay", False)) if wm else False
+
         if action == 'TOGGLE_OVERLAY':
             if pressed:
-                # Toggle overlay on button press
-                prefs = get_addon_preferences(self._context)
-                if prefs:
-                    prefs.show_overlay = not prefs.show_overlay
+                self._set_overlay_visibility(not current_visibility)
         elif action == 'SHOW_OVERLAY':
-            # Show overlay while button is held
-            prefs = get_addon_preferences(self._context)
-            if prefs:
-                if pressed:
-                    self.show_overlay_button_held = True
-                    prefs.show_overlay = True
-                else:
-                    if self.show_overlay_button_held:
-                        prefs.show_overlay = False
-                        self.show_overlay_button_held = False
+            if pressed:
+                self.show_overlay_button_held = True
+                self._set_overlay_visibility(True)
+            else:
+                if self.show_overlay_button_held:
+                    self._set_overlay_visibility(False)
+                    self.show_overlay_button_held = False
 
     def _activate_temp_mode_shift(self, button_name, temp_mode_name=""):
         """Activate temporary mode shift - store current mode and switch to target or next mode."""
@@ -931,8 +943,33 @@ class ControllerActionExecutor:
         
         return False
 
+_RUNTIME_CONTROLLER_KEY = "controller_actions"
 
-controller_actions = ControllerActionExecutor()
+
+def _runtime_store():
+    namespace = bpy.app.driver_namespace
+    store = namespace.get(__package__)
+    if store is None:
+        store = {}
+        namespace[__package__] = store
+    return store
 
 
-__all__ = ["ControllerActionExecutor", "controller_actions"]
+def get_controller_actions(context=None):
+    """Return the shared ControllerActionExecutor stored in Blender's driver namespace."""
+    store = _runtime_store()
+    controller_actions = store.get(_RUNTIME_CONTROLLER_KEY)
+    if not isinstance(controller_actions, ControllerActionExecutor):
+        controller_actions = ControllerActionExecutor()
+        controller_actions.reset(context or bpy.context)
+        store[_RUNTIME_CONTROLLER_KEY] = controller_actions
+    return controller_actions
+
+
+def clear_controller_actions():
+    """Remove the cached ControllerActionExecutor from the driver namespace."""
+    store = _runtime_store()
+    store.pop(_RUNTIME_CONTROLLER_KEY, None)
+
+
+__all__ = ["get_controller_actions", "clear_controller_actions"]
