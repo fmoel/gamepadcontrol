@@ -607,25 +607,53 @@ class GamepadOverlayRenderer:
             blf.draw(font_id, action)
 
 
-overlay_renderer = GamepadOverlayRenderer()
+
+_RUNTIME_OVERLAY_KEY = "gamepad_overlay_renderer"
+
+def _runtime_store() -> Dict[str, object]:
+    """Return the driver-namespace store used to cache overlay state."""
+    namespace = bpy.app.driver_namespace
+    store = namespace.get(__package__)
+    if store is None:
+        store = {}
+        namespace[__package__] = store
+    return store
+
+def _get_overlay_renderer():
+    """Retrieve (and optionally create) the cached overlay renderer."""
+    store = _runtime_store()
+    renderer = store.get(_RUNTIME_OVERLAY_KEY)
+    if not isinstance(renderer, GamepadOverlayRenderer):
+        renderer = None
+    if renderer is None:
+        renderer = GamepadOverlayRenderer()
+        store[_RUNTIME_OVERLAY_KEY] = renderer
+    return renderer
+
+
+def _clear_overlay_renderer():
+    """Disable and remove any renderer instance tracked in the runtime store."""
+    store = _runtime_store()
+    renderer = store.pop(_RUNTIME_OVERLAY_KEY, None)
+    if renderer:
+        renderer.disable()
 
 
 def sync_overlay_state(_self=None, context=None):
     """Sync overlay renderer state with user preferences."""
-    if context is None:
-        context = bpy.context
-    if not context:
+    wm = getattr(bpy.context, "window_manager", None)
+    if not wm:
         return
-    wm = context.window_manager
     if getattr(wm, "cl_show_gamepad_overlay", False):
-        overlay_renderer.enable()
+        renderer = _get_overlay_renderer()
+        if renderer:
+            renderer.enable()
     else:
-        overlay_renderer.disable()
-
+        _clear_overlay_renderer()
 
 def unregister_overlay():
     """Disable overlay rendering on unregister."""
-    overlay_renderer.disable()
+    _clear_overlay_renderer()
 
 
 __all__ = [
