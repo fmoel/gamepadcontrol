@@ -82,7 +82,7 @@ class ControllerActionExecutor:
         self.cursor_window = None
         self.cursor_position = None
         self.cursor_fractional_x = 0.0
-        self.cursor_fractional_y = 0.0
+        self.cursor_fractional_y = 0.0e
         self._last_mouse_event = None
         self.mode_index = 0
         self.last_mode_index = None
@@ -94,10 +94,96 @@ class ControllerActionExecutor:
         self.temp_mode_previous_index = None
         self.temp_mode_shift_button = None  # Track which physical button activated temp mode
         self.show_overlay_button_held = False
-        self._context = None
-        self._window = None
-        self._reader = None
-        self._rv3d = None
+        self._window = None  # Only for cursor positioning
+        self._reader = None  # Current frame's controller state
+        # Track the last known VIEW_3D area under the cursor for multi-viewport scenarios
+        self._last_view3d_window = None
+        self._last_view3d_area = None
+
+
+
+    def _find_view3d_at_cursor(self, window, cursor_x, cursor_y):
+        """Find a VIEW_3D area at the given cursor position. Returns area or None."""
+        def area_contains_point(area, x, y):
+            """Check if a point (window coordinates) is inside an area."""
+            return (area.x <= x < area.x + area.width and 
+                    area.y <= y < area.y + area.height)
+        
+        if window and window.screen:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D' and area_contains_point(area, cursor_x, cursor_y):
+                    return area
+        return None
+
+    def _find_view3d_area(self):
+        """Find a valid VIEW_3D area. Returns (window, area) or (None, None).
+        
+        Priority order:
+        1. The last VIEW_3D area the cursor was over (for multi-viewport support)
+        2. Current context's area (if it's a VIEW_3D)
+        3. Any VIEW_3D in the current window
+        4. Any VIEW_3D in any window (fallback)
+        """
+        # Priority 1: Use the last known VIEW_3D area if still valid
+        if self._last_view3d_area is not None and self._last_view3d_window is not None:
+            # Verify the area is still valid (not destroyed by workspace switch)
+            try:
+                if self._last_view3d_window.screen:
+                    # Check if the area is still in the screen's areas collection
+                    for area in self._last_view3d_window.screen.areas:
+                        if area == self._last_view3d_area and area.type == 'VIEW_3D':
+                            return self._last_view3d_window, self._last_view3d_area
+            except ReferenceError:
+                pass
+            # Clear invalid references
+            self._last_view3d_window = None
+            self._last_view3d_area = None
+        
+        # Priority 2: Try current context's area
+        area = getattr(bpy.context, "area", None)
+        window = getattr(bpy.context, "window", None)
+        if area is not None and area.type == 'VIEW_3D':
+            return window, area
+
+        # Priority 3: Try current window's areas
+        if window and window.screen:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    return window, area
+
+        # Priority 4: Try all windows
+        wm = getattr(bpy.context, "window_manager", None)
+        if wm:
+            for win in wm.windows:
+                if win.screen:
+                    for area in win.screen.areas:
+                        if area.type == 'VIEW_3D':
+                            return win, area
+        return None, None
+
+    def _execute_in_view3d(self, operator_func):
+        """Execute an operator function with VIEW_3D context override if needed.
+        
+        Args:
+            operator_func: A callable that takes no arguments and calls the operator
+        Returns:
+            True if executed successfully, False if no VIEW_3D area found
+        """
+        window, area = self._find_view3d_area()
+        if not area:
+            return False
+        
+        # Find a region in the area (required for some operators)
+        region = None
+        for r in area.regions:
+            if r.type == 'WINDOW':
+                region = r
+                break
+        
+        # Use temp_override to ensure correct context
+        with bpy.context.temp_override(window=window, area=area, region=region):
+            operator_func()
+        return True
 
     def notify_mouse_move(self, event, context):
         window = getattr(context, "window", None)
@@ -116,25 +202,28 @@ class ControllerActionExecutor:
         # Reset fractional accumulators when mouse takes control
         self.cursor_fractional_x = 0.0
         self.cursor_fractional_y = 0.0
+        
+        # Track which VIEW_3D area the cursor is over for multi-viewport support
+        view3d_area = self._find_view3d_at_cursor(window, event.mouse_x, event.mouse_y)
+        if view3d_area is not None:
+            self._last_view3d_window = window
+            self._last_view3d_area = view3d_area
 
     def apply(self, context, reader):
-        self._context = context
         self._reader = reader
         
         # Verify that mouse buttons we think are pressed are actually still pressed
         # (This handles the case where Blender froze during window drag and missed the release)
         self._verify_mouse_button_states()
         
-        prefs = get_addon_preferences(context)
+        prefs = get_addon_preferences(bpy.context)
         if not prefs or not prefs.modes:
             return
         
-        # Always try to locate view3d, even if we had it before
-        # (context can change when clicking window controls)
-        if not self._locate_and_store_view3d():
-            # Keep processing input even if we can't find VIEW_3D
-            # This ensures buttons still work
-            pass
+        # Find a window for cursor positioning (prefer current context's window)
+        window = getattr(bpy.context, "window", None)
+        if window:
+            self._window = window
         
         if self._window:
             self._ensure_cursor_defaults()
@@ -162,9 +251,6 @@ class ControllerActionExecutor:
                 self._deactivate_temp_mode_shift()
                 return  # Re-process with correct mode
         
-        self._apply_mode(mode)
-
-    def _apply_mode(self, mode):
         self._process_side(
             mode,
             mode.left_side,
@@ -192,8 +278,7 @@ class ControllerActionExecutor:
 
     def _set_overlay_visibility(self, enabled: bool):
         """Helper to toggle the overlay window-manager property and force a redraw."""
-        context = self._context if self._context else bpy.context
-        wm = getattr(context, "window_manager", None)
+        wm = getattr(bpy.context, "window_manager", None)
         if not wm or not hasattr(wm, "cl_show_gamepad_overlay"):
             return
         if bool(wm.cl_show_gamepad_overlay) == bool(enabled):
@@ -201,7 +286,7 @@ class ControllerActionExecutor:
         wm.cl_show_gamepad_overlay = bool(enabled)
         try:
             from . import view3d_overlay_ui
-            view3d_overlay_ui.sync_overlay_state(context=context)
+            view3d_overlay_ui.sync_overlay_state(context=bpy.context)
         except Exception:
             pass
 
@@ -400,9 +485,9 @@ class ControllerActionExecutor:
         elif action == 'MOUSE_RIGHT':
             self._press_mouse_button('RIGHTMOUSE')
         elif action == 'PIVOT_PIE':
-            bpy.ops.wm.call_menu_pie('INVOKE_DEFAULT', name="VIEW3D_MT_pivot_pie")
+            self._execute_in_view3d(lambda: bpy.ops.wm.call_menu_pie('INVOKE_DEFAULT', name="VIEW3D_MT_pivot_pie"))
         elif action == 'ORIENTATION_PIE':
-            bpy.ops.wm.call_menu_pie('INVOKE_DEFAULT', name="VIEW3D_MT_orientations_pie")
+            self._execute_in_view3d(lambda: bpy.ops.wm.call_menu_pie('INVOKE_DEFAULT', name="VIEW3D_MT_orientations_pie"))
         elif action == 'NEXT_MODE':
             self._change_mode(1)
         elif action == 'PREV_MODE':
@@ -415,7 +500,7 @@ class ControllerActionExecutor:
             bpy.ops.transform.resize('INVOKE_DEFAULT')
         elif action == 'EXTRUDE':
             # Context-aware extrude: works in both edit and object mode
-            if self._context.mode == 'EDIT_MESH':
+            if bpy.context.mode == 'EDIT_MESH':
                 bpy.ops.mesh.extrude_region_move('INVOKE_DEFAULT')
             else:
                 self._tap_key('E')  # Fallback for non-mesh contexts
@@ -440,18 +525,18 @@ class ControllerActionExecutor:
         elif action == 'KEYFRAME_ADD':
             bpy.ops.anim.keyframe_insert_menu('INVOKE_DEFAULT')
         elif action == 'KEYFRAME_REMOVE':
-            bpy.ops.anim.keyframe_delete_v3d('INVOKE_DEFAULT')
+            self._execute_in_view3d(lambda: bpy.ops.anim.keyframe_delete_v3d('INVOKE_DEFAULT'))
         elif action == 'MODE_TOGGLE_EDIT':
             bpy.ops.object.mode_set(mode='EDIT', toggle=True)
         elif action == 'SELECT_ALL':
             # Context-aware selection
-            if self._context.mode == 'OBJECT':
+            if bpy.context.mode == 'OBJECT':
                 bpy.ops.object.select_all(action='SELECT')
             else:
                 bpy.ops.mesh.select_all(action='SELECT')
         elif action == 'SELECT_NONE':
             # Context-aware deselection
-            if self._context.mode == 'OBJECT':
+            if bpy.context.mode == 'OBJECT':
                 bpy.ops.object.select_all(action='DESELECT')
             else:
                 bpy.ops.mesh.select_all(action='DESELECT')
@@ -465,9 +550,9 @@ class ControllerActionExecutor:
             self._keyframe_jump(False)
         elif action == 'DELETE':
             # Context-aware delete
-            if self._context.mode == 'OBJECT':
+            if bpy.context.mode == 'OBJECT':
                 bpy.ops.object.delete('INVOKE_DEFAULT')
-            elif self._context.mode == 'EDIT_MESH':
+            elif bpy.context.mode == 'EDIT_MESH':
                 bpy.ops.mesh.delete('INVOKE_DEFAULT', type='VERT')
             else:
                 self._tap_key('DEL')  # Fallback for other contexts
@@ -478,21 +563,27 @@ class ControllerActionExecutor:
         elif action == 'MOUSE_WHEEL_DOWN':
             self._mouse_wheel(-1)
         elif action == 'VIEW_LEFT':
-            bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='LEFT', align_active=False)
+            self._execute_in_view3d(lambda: bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='LEFT', align_active=False))
         elif action == 'VIEW_RIGHT':
-            bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='RIGHT', align_active=False)
+            self._execute_in_view3d(lambda: bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='RIGHT', align_active=False))
         elif action == 'VIEW_TOP':
-            bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='TOP', align_active=False)
+            self._execute_in_view3d(lambda: bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='TOP', align_active=False))
         elif action == 'VIEW_BOTTOM':
-            bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='BOTTOM', align_active=False)
+            self._execute_in_view3d(lambda: bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='BOTTOM', align_active=False))
         elif action == 'VIEW_FRONT':
-            bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='FRONT', align_active=False)
+            self._execute_in_view3d(lambda: bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='FRONT', align_active=False))
         elif action == 'VIEW_BACK':
-            bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='BACK', align_active=False)
+            self._execute_in_view3d(lambda: bpy.ops.view3d.view_axis('INVOKE_DEFAULT', type='BACK', align_active=False))
         elif action == 'VIEW_CAMERA':
-            bpy.ops.view3d.view_camera('INVOKE_DEFAULT')
+            self._execute_in_view3d(lambda: bpy.ops.view3d.view_camera('INVOKE_DEFAULT'))
         elif action == 'VIEW_PERSPECTIVE':
-            bpy.ops.view3d.view_persportho('INVOKE_DEFAULT')
+            self._execute_in_view3d(lambda: bpy.ops.view3d.view_persportho('INVOKE_DEFAULT'))
+        elif action == 'DEBUG':
+            ctx_area = getattr(bpy.context, 'area', None)
+            found_win, found_area = self._find_view3d_area()
+            print(f"[DEBUG] bpy.context.area: {ctx_area} (type: {ctx_area.type if ctx_area else 'N/A'})")
+            print(f"[DEBUG] _find_view3d_area(): window={found_win}, area={found_area}")
+            print(f"[DEBUG] rv3d found: {self._find_view3d_rv3d() is not None}")
 
     def _execute_button_release(self, action):
         if action not in self.HOLDABLE_ACTIONS:
@@ -524,7 +615,7 @@ class ControllerActionExecutor:
             return
         self.button_state[reader_key] = pressed
 
-        wm = getattr(self._context, "window_manager", None)
+        wm = getattr(bpy.context, "window_manager", None)
         current_visibility = bool(getattr(wm, "cl_show_gamepad_overlay", False)) if wm else False
 
         if action == 'TOGGLE_OVERLAY':
@@ -543,7 +634,7 @@ class ControllerActionExecutor:
         """Activate temporary mode shift - store current mode and switch to target or next mode."""
         if self.temp_mode_shift_active:
             return
-        prefs = get_addon_preferences(self._context)
+        prefs = get_addon_preferences(bpy.context)
         if not prefs or not prefs.modes:
             return
         enabled_indices = get_enabled_mode_indices(prefs)
@@ -572,7 +663,7 @@ class ControllerActionExecutor:
 
     def _find_mode_index_by_name(self, mode_name, enabled_indices=None):
         """Find mode index by name, only considering enabled modes if list provided."""
-        prefs = get_addon_preferences(self._context)
+        prefs = get_addon_preferences(bpy.context)
         if not prefs or not prefs.modes:
             return None
         
@@ -589,7 +680,7 @@ class ControllerActionExecutor:
         self.temp_mode_shift_active = False
         self.temp_mode_shift_button = None
         if self.temp_mode_previous_index is not None:
-            prefs = get_addon_preferences(self._context)
+            prefs = get_addon_preferences(bpy.context)
             if prefs:
                 enabled_indices = get_enabled_mode_indices(prefs)
                 if self.temp_mode_previous_index in enabled_indices:
@@ -602,7 +693,7 @@ class ControllerActionExecutor:
             self.temp_mode_previous_index = None
 
     def _change_mode(self, delta):
-        prefs = get_addon_preferences(self._context)
+        prefs = get_addon_preferences(bpy.context)
         if not prefs or not prefs.modes:
             return False
         enabled_indices = get_enabled_mode_indices(prefs)
@@ -621,17 +712,14 @@ class ControllerActionExecutor:
         self.mode_index = enabled_indices[new_slot]
         self._flush_inputs()
         self.last_mode_index = self.mode_index
-        prefs = get_addon_preferences(self._context)
-        if prefs:
-            prefs.update_mode_statuses(active_index=self.mode_index)
+        prefs.update_mode_statuses(active_index=self.mode_index)
         # Force header redraw to update mode display (lazy import to avoid circular dependency)
         from . import view3d_gamepad_indicator_op
         view3d_gamepad_indicator_op.redraw_view3d_headers()
         return True
 
     def set_mode(self, context, target_index):
-        self._context = context
-        prefs = get_addon_preferences(context)
+        prefs = get_addon_preferences(context or bpy.context)
         if not prefs or not prefs.modes:
             return False
         enabled_indices = get_enabled_mode_indices(prefs)
@@ -743,57 +831,63 @@ class ControllerActionExecutor:
         )
 
     def _dolly_view(self, amount, speed):
-        if self._rv3d is None:
+        rv3d = self._find_view3d_rv3d()
+        if rv3d is None:
             return
-        direction = self._rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
-        self._rv3d.view_location = self._rv3d.view_location + direction * (amount * speed)
+        direction = rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
+        rv3d.view_location = rv3d.view_location + direction * (amount * speed)
 
     def _pan_view(self, leftx, lefty, speed):
-        if self._rv3d is None:
+        rv3d = self._find_view3d_rv3d()
+        if rv3d is None:
             return
         offset = Vector((-leftx, lefty, 0.0)) * speed
-        self._rv3d.view_location = self._rv3d.view_location + (self._rv3d.view_rotation @ offset)
+        rv3d.view_location = rv3d.view_location + (rv3d.view_rotation @ offset)
 
     def _orbit_view(self, yaw=0.0, pitch=0.0):
         """Orbit camera around view_location (camera moves, keeps looking at same point)."""
-        if self._rv3d is None:
+        rv3d = self._find_view3d_rv3d()
+        if rv3d is None:
             return
         if abs(yaw) > 1e-5:
-            self._rv3d.view_rotation = Quaternion((0.0, 0.0, 1.0), yaw) @ self._rv3d.view_rotation
+            rv3d.view_rotation = Quaternion((0.0, 0.0, 1.0), yaw) @ rv3d.view_rotation
         if abs(pitch) > 1e-5:
-            axis = (self._rv3d.view_rotation @ Vector((1.0, 0.0, 0.0))).normalized()
-            self._rv3d.view_rotation = Quaternion(axis, pitch) @ self._rv3d.view_rotation
+            axis = (rv3d.view_rotation @ Vector((1.0, 0.0, 0.0))).normalized()
+            rv3d.view_rotation = Quaternion(axis, pitch) @ rv3d.view_rotation
 
     def _rotate_view(self, yaw=0.0, pitch=0.0):
         """Rotate camera in place (camera stays still, looks in different direction)."""
-        if self._rv3d is None:
+        rv3d = self._find_view3d_rv3d()
+        if rv3d is None:
             return
         # Calculate current camera position
-        view_dir = self._rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
-        cam_pos = self._rv3d.view_location - view_dir * self._rv3d.view_distance
+        view_dir = rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
+        cam_pos = rv3d.view_location - view_dir * rv3d.view_distance
         
         # Apply rotation
         if abs(yaw) > 1e-5:
-            self._rv3d.view_rotation = Quaternion((0.0, 0.0, 1.0), yaw) @ self._rv3d.view_rotation
+            rv3d.view_rotation = Quaternion((0.0, 0.0, 1.0), yaw) @ rv3d.view_rotation
         if abs(pitch) > 1e-5:
-            axis = (self._rv3d.view_rotation @ Vector((1.0, 0.0, 0.0))).normalized()
-            self._rv3d.view_rotation = Quaternion(axis, pitch) @ self._rv3d.view_rotation
+            axis = (rv3d.view_rotation @ Vector((1.0, 0.0, 0.0))).normalized()
+            rv3d.view_rotation = Quaternion(axis, pitch) @ rv3d.view_rotation
         
         # Update view_location to keep camera position fixed
-        new_view_dir = self._rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
-        self._rv3d.view_location = cam_pos + new_view_dir * self._rv3d.view_distance
+        new_view_dir = rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
+        rv3d.view_location = cam_pos + new_view_dir * rv3d.view_distance
 
     def _roll_view(self, amount):
-        if self._rv3d is None:
+        rv3d = self._find_view3d_rv3d()
+        if rv3d is None:
             return
-        axis = (self._rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))).normalized()
-        self._rv3d.view_rotation = Quaternion(axis, amount * self.DEFAULT_ROLL_SPEED) @ self._rv3d.view_rotation
+        axis = (rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))).normalized()
+        rv3d.view_rotation = Quaternion(axis, amount * self.DEFAULT_ROLL_SPEED) @ rv3d.view_rotation
 
     def _zoom_view(self, amount):
-        if self._rv3d is None:
+        rv3d = self._find_view3d_rv3d()
+        if rv3d is None:
             return
         factor = 1.0 - amount
-        self._rv3d.view_distance = max(0.01, self._rv3d.view_distance * factor)
+        rv3d.view_distance = max(0.01, rv3d.view_distance * factor)
 
     def _simulate_key_event(self, key, value):
         self._event_simulate({'type': key, 'value': value})
@@ -868,9 +962,11 @@ class ControllerActionExecutor:
             return False
 
     def _window_override(self):
+        if not self._window:
+            return None
         override = {'window': self._window, 'screen': self._window.screen}
-        override['scene'] = getattr(self._context, "scene", None)
-        override['view_layer'] = getattr(self._context, "view_layer", None)
+        override['scene'] = getattr(bpy.context, "scene", None)
+        override['view_layer'] = getattr(bpy.context, "view_layer", None)
         return override
 
     def _fallback_enabled_index(self, enabled_indices):
@@ -894,8 +990,7 @@ class ControllerActionExecutor:
         self.axis_state.clear()
 
 
-    def reset(self, context):
-        self._context = context
+    def reset(self, context=None):
         self._flush_inputs()
         self.cursor_owner = 'controller'
         self._last_mouse_event = None
@@ -908,43 +1003,14 @@ class ControllerActionExecutor:
         self.temp_mode_shift_button = None
         self.show_overlay_button_held = False
 
-    def _locate_and_store_view3d(self):
-        """Find a VIEW_3D area and set window and rv3d member variables."""
-        def try_area(win, area):
-            if area.type != 'VIEW_3D':
-                return False
-            space = area.spaces.active
-            if space and space.region_3d:
-                self._window = win
-                self._rv3d = space.region_3d
-                return True
-            return False
-
-        # Try current context first
-        window = getattr(self._context, "window", None)
-        area = getattr(self._context, "area", None)
-        if window and area and try_area(window, area):
-            return True
-
-        # Try current window's areas
-        if window and window.screen:
-            for area in window.screen.areas:
-                if try_area(window, area):
-                    return True
-
-        # Try all windows
-        wm = getattr(self._context, "window_manager", None)
-        if wm:
-            for win in wm.windows:
-                if win.screen:
-                    for area in win.screen.areas:
-                        if try_area(win, area):
-                            return True
-        
-        return False
+    def _find_view3d_rv3d(self):
+        """Find a VIEW_3D region_3d. Returns rv3d or None."""
+        _, area = self._find_view3d_area()
+        if area and area.spaces.active and area.spaces.active.region_3d:
+            return area.spaces.active.region_3d
+        return None
 
 _RUNTIME_CONTROLLER_KEY = "controller_actions"
-
 
 def _runtime_store():
     namespace = bpy.app.driver_namespace
@@ -955,13 +1021,13 @@ def _runtime_store():
     return store
 
 
-def get_controller_actions(context=None):
+def get_controller_actions():
     """Return the shared ControllerActionExecutor stored in Blender's driver namespace."""
     store = _runtime_store()
     controller_actions = store.get(_RUNTIME_CONTROLLER_KEY)
     if not isinstance(controller_actions, ControllerActionExecutor):
         controller_actions = ControllerActionExecutor()
-        controller_actions.reset(context or bpy.context)
+        controller_actions.reset()
         store[_RUNTIME_CONTROLLER_KEY] = controller_actions
     return controller_actions
 

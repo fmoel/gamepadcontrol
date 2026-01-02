@@ -31,15 +31,34 @@ class CL_OT_ControllerInputs(bpy.types.Operator):
     _timer = None
 
     def modal(self, context, event):
-        if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
-            get_controller_actions().notify_mouse_move(event, context)
-        if event.type == 'TIMER':
-            CL_OT_ControllerInputs.sdl2_controller_handler.poll(context)
         wm = context.window_manager
+
         if not wm.cl_controller_running:
             self.cancel(context)
             return {'CANCELLED'}
+        if self._file_browser_active(context):
+            # Avoid reading event fields while the file browser window is open.
+            return {'PASS_THROUGH'}
+        event_type = getattr(event, "type", None)
+        if event_type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
+            get_controller_actions().notify_mouse_move(event, context)
+        if event_type == 'TIMER':
+            CL_OT_ControllerInputs.sdl2_controller_handler.poll(context)
         return {'PASS_THROUGH'}
+
+    @staticmethod
+    def _file_browser_active(context):
+        wm = getattr(context, "window_manager", None)
+        if not wm:
+            return False
+        for window in wm.windows:
+            screen = getattr(window, "screen", None)
+            if not screen:
+                continue
+            for area in screen.areas:
+                if area.type == 'FILE_BROWSER':
+                    return True
+        return False
 
     def execute(self, context):
         create_reader()
@@ -67,7 +86,7 @@ class CL_OT_ControllerInputs(bpy.types.Operator):
 
         wm.cl_controller_running = False
 
-        get_controller_actions().reset(context)
+        get_controller_actions().reset()
 
         self.report({'INFO'}, "Gamepad stopped")
 
