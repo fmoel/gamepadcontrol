@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   package:
@@ -83,19 +82,22 @@ jobs:
 
   cleanup-artifacts:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    permissions:
+      actions: write
     steps:
-      - name: Remove artifacts for merged PR
+      - name: Remove artifacts for closed PR
         env:
           GH_TOKEN: ${{ github.token }}
           PR_SUFFIX: -pr-${{ github.event.number }}
+          PR_NUMBER: ${{ github.event.number }}
         run: |
           set -euo pipefail
-          artifacts=$(gh api repos/${{ github.repository }}/actions/artifacts --paginate | jq -r '.artifacts[] | select(.name | endswith(env.PR_SUFFIX)) | .id')
+          artifacts=$(gh api repos/${{ github.repository }}/actions/artifacts --paginate | jq -r --arg pr_suffix "$PR_SUFFIX" '.artifacts[] | select(.name | endswith($pr_suffix)) | .id')
           if [ -z "$artifacts" ]; then
-            echo "No artifacts to delete for PR${PR_SUFFIX}" && exit 0
+            echo "No artifacts to delete for PR #$PR_NUMBER" && exit 0
           fi
           for artifact_id in $artifacts; do
             gh api repos/${{ github.repository }}/actions/artifacts/$artifact_id -X DELETE >/dev/null
-            echo "Deleted artifact $artifact_id"
+            echo "Deleted artifact $artifact_id for PR #$PR_NUMBER"
           done
