@@ -20,7 +20,7 @@ from __future__ import annotations
 import bpy
 from bpy.props import IntProperty
 
-from .controller_actions import controller_actions
+from .controller_actions import get_controller_actions
 from .preferences import get_addon_preferences
 
 
@@ -75,10 +75,10 @@ class CL_OT_set_gamepad_mode(bpy.types.Operator):
         wm = context.window_manager
         running = getattr(wm, "cl_controller_running", False)
         if running:
-            controller_actions.set_mode(context, target)
+            get_controller_actions().set_mode(context, target)
         else:
-            controller_actions.mode_index = target
-            controller_actions.last_mode_index = None
+            get_controller_actions().mode_index = target
+            get_controller_actions().last_mode_index = None
             prefs.update_mode_statuses(active_index=None)
             redraw_view3d_headers()
         return {'FINISHED'}

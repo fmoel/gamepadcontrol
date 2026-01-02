@@ -943,8 +943,33 @@ class ControllerActionExecutor:
         
         return False
 
+_RUNTIME_CONTROLLER_KEY = "controller_actions"
 
-controller_actions = ControllerActionExecutor()
+
+def _runtime_store():
+    namespace = bpy.app.driver_namespace
+    store = namespace.get(__package__)
+    if store is None:
+        store = {}
+        namespace[__package__] = store
+    return store
 
 
-__all__ = ["ControllerActionExecutor", "controller_actions"]
+def get_controller_actions(context=None):
+    """Return the shared ControllerActionExecutor stored in Blender's driver namespace."""
+    store = _runtime_store()
+    controller_actions = store.get(_RUNTIME_CONTROLLER_KEY)
+    if not isinstance(controller_actions, ControllerActionExecutor):
+        controller_actions = ControllerActionExecutor()
+        controller_actions.reset(context or bpy.context)
+        store[_RUNTIME_CONTROLLER_KEY] = controller_actions
+    return controller_actions
+
+
+def clear_controller_actions():
+    """Remove the cached ControllerActionExecutor from the driver namespace."""
+    store = _runtime_store()
+    store.pop(_RUNTIME_CONTROLLER_KEY, None)
+
+
+__all__ = ["get_controller_actions", "clear_controller_actions"]

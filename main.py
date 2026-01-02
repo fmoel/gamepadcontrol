@@ -15,7 +15,7 @@
 
 # pyright: reportInvalidTypeForm=false
 
-from .controller_actions import ControllerActionExecutor, controller_actions
+from .controller_actions import get_controller_actions
 from .operators import CL_OT_ControllerInputs
 from .sdl_handler import create_reader, get_reader
 from .sdl_handler import SDL2_Controller_Handler
@@ -23,8 +23,7 @@ from .system_events import SystemEventInjector
 
 
 __all__ = [
-    "ControllerActionExecutor",
-    "controller_actions",
+    "get_controller_actions",
     "SystemEventInjector",
     "SDL2_Controller_Handler",
     "CL_OT_ControllerInputs",

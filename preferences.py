@@ -477,12 +477,12 @@ class CL_GamepadPreferences(AddonPreferences):
     def _detect_active_mode_index(self) -> Optional[int]:
         try:
             from .enablement import is_controller_running  # Local import to avoid cycles
-            from .controller_actions import controller_actions
+            from .controller_actions import get_controller_actions
         except Exception:
             return None
         if not is_controller_running():
             return None
-        return getattr(controller_actions, "mode_index", None)
+        return getattr(get_controller_actions(), "mode_index", None)
 
     def update_mode_statuses(self, active_index: Optional[int] = None) -> None:
         if not self.modes:

@@ -26,7 +26,7 @@ import blf
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-from .controller_actions import controller_actions
+from .controller_actions import get_controller_actions
 from .preferences import (
     format_action_label,
     format_combined_axis_label,
@@ -218,7 +218,7 @@ def build_gamepad_snapshot(context) -> Optional[GamepadLayoutSnapshot]:
     
     if wm and getattr(wm, "cl_controller_running", False):
         if enabled_indices:
-            runtime_index = controller_actions.mode_index
+            runtime_index = get_controller_actions().mode_index
             if runtime_index not in enabled_indices:
                 runtime_index = enabled_indices[0]
             mode_index = runtime_index
@@ -279,9 +279,11 @@ class GamepadOverlayRenderer:
             return None
         try:
             self._image = bpy.data.images.load(OVERLAY_IMAGE_PATH, check_existing=True)
-            # Ensure alpha channel is enabled
-            self._image.alpha_mode = 'STRAIGHT'
-            self._image.use_alpha = True
+            # Ensure alpha channel is enabled when supported
+            if hasattr(self._image, "alpha_mode"):
+                self._image.alpha_mode = 'STRAIGHT'
+            if hasattr(self._image, "use_alpha"):
+                self._image.use_alpha = True
         except RuntimeError:
             self._image = None
         return self._image
@@ -628,7 +630,6 @@ def unregister_overlay():
 
 __all__ = [
     "build_gamepad_snapshot",
-    "overlay_renderer",
     "sync_overlay_state",
     "unregister_overlay",
 ]
