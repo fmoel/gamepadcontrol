@@ -116,11 +116,11 @@
         "trigger_action": "MOUSE_LEFT",
         "axis": {
           "stick_mode": "COMBINED",
-          "invert_x": false,
+          "invert_x": true,
           "invert_y": true,
           "combined_action": "PAN_VIEW",
           "cursor_speed": 0.5,
-          "pan_speed": 1.0,
+          "pan_speed": 0.10000000149011612,
           "dolly_speed": 1.0,
           "orbit_speed": 0.20000000298023224,
           "rotate_speed": 0.20000000298023224,
