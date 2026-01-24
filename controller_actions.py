@@ -82,7 +82,7 @@ class ControllerActionExecutor:
         self.cursor_window = None
         self.cursor_position = None
         self.cursor_fractional_x = 0.0
-        self.cursor_fractional_y = 0.0e
+        self.cursor_fractional_y = 0.0
         self._last_mouse_event = None
         self.mode_index = 0
         self.last_mode_index = None
