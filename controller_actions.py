@@ -941,7 +941,7 @@ class ControllerActionExecutor:
 
         if not self.event_warning_shown:
             self.event_warning_shown = True
-            print("[ControllerActions] Event injection unavailable. Controller button mapping requires Windows SendInput support.")
+            print("[ControllerActions] Event injection unavailable. Controller button mapping requires Windows SendInput or macOS Quartz events (with Accessibility permission).")
 
     def _execute_operator(self, override, operator, error_label, **kwargs):
         if not override or not operator:
