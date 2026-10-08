@@ -23,7 +23,11 @@ _for Blender_
 
 Configuration can be done in Preferences -> Input -> Gamepad
 
-Tested currently on Windows-x64 with a PS5 controller
+Tested currently on Windows-x64 with a PS5 controller. Also runs on macOS (Apple Silicon and Intel).
+
+### macOS notes
+
+Button mappings that send keys or mouse events (mouse pointer mode, triggers as mouse buttons, copy/paste, axis constraints, etc.) use Quartz events. Grant Blender access in **System Settings > Privacy & Security > Accessibility**, then restart Blender. Viewport navigation works without this permission. Copy/paste chords are sent as ⌘C / ⌘V to match Blender's macOS keymap.
 
 ## Installation
 

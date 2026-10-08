@@ -28,6 +28,8 @@ class SystemEventInjector:
         self._platform = platform.system()
         if self._platform == "Windows":
             self._init_windows()
+        elif self._platform == "Darwin":
+            self._init_macos()
 
     def _init_windows(self):
         try:
@@ -110,9 +112,92 @@ class SystemEventInjector:
         }
         self.available = True
 
+    def _init_macos(self):
+        # Quartz Event Services via ctypes; works on both Apple Silicon and Intel.
+        try:
+            self._cg = ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+            self._cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        except OSError:
+            return
+
+        class CGPoint(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+        self._CGPoint = CGPoint
+        cg = self._cg
+        cg.CGEventCreate.restype = ctypes.c_void_p
+        cg.CGEventCreate.argtypes = [ctypes.c_void_p]
+        cg.CGEventGetLocation.restype = CGPoint
+        cg.CGEventGetLocation.argtypes = [ctypes.c_void_p]
+        cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+        cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint, ctypes.c_uint32]
+        cg.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
+        cg.CGEventCreateKeyboardEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+        # Non-variadic variant (macOS 10.13+); the variadic one is unsafe through ctypes on arm64.
+        cg.CGEventCreateScrollWheelEvent2.restype = ctypes.c_void_p
+        cg.CGEventCreateScrollWheelEvent2.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+            ctypes.c_int32, ctypes.c_int32, ctypes.c_int32,
+        ]
+        cg.CGEventSetIntegerValueField.restype = None
+        cg.CGEventSetIntegerValueField.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64]
+        cg.CGEventSetFlags.restype = None
+        cg.CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        cg.CGEventPost.restype = None
+        cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+        cg.AXIsProcessTrusted.restype = ctypes.c_bool
+        cg.AXIsProcessTrusted.argtypes = []
+        self._cf.CFRelease.restype = None
+        self._cf.CFRelease.argtypes = [ctypes.c_void_p]
+
+        self._kCGHIDEventTap = 0
+        self._kCGEventLeftMouseDown = 1
+        self._kCGEventLeftMouseUp = 2
+        self._kCGEventRightMouseDown = 3
+        self._kCGEventRightMouseUp = 4
+        self._kCGEventMouseMoved = 5
+        self._kCGEventLeftMouseDragged = 6
+        self._kCGEventRightMouseDragged = 7
+        self._kCGMouseButtonLeft = 0
+        self._kCGMouseButtonRight = 1
+        self._kCGMouseEventDeltaX = 4
+        self._kCGMouseEventDeltaY = 5
+        self._kCGScrollEventUnitLine = 1
+        self._mac_held_buttons = set()
+        self._mac_flags = 0
+        self._ax_warning_shown = False
+        # Virtual key code -> modifier flag mask (Shift, Control, Option, Command).
+        self._mac_modifier_flags = {
+            56: 0x00020000,
+            59: 0x00040000,
+            58: 0x00080000,
+            55: 0x00100000,
+        }
+        # ANSI virtual key codes (Carbon kVK_*). LEFT_CTRL maps to Command because
+        # Blender's macOS keymap binds Ctrl shortcuts such as copy/paste to Cmd.
+        self._vk_map = {
+            'A': 0, 'S': 1, 'D': 2, 'F': 3, 'H': 4, 'G': 5, 'Z': 6, 'X': 7,
+            'C': 8, 'V': 9, 'B': 11, 'Q': 12, 'W': 13, 'E': 14, 'R': 15,
+            'Y': 16, 'T': 17, 'O': 31, 'U': 32, 'I': 34, 'P': 35, 'L': 37,
+            'J': 38, 'K': 40, 'N': 45, 'M': 46,
+            '1': 18, '2': 19, '3': 20, '4': 21, '5': 23, '6': 22,
+            '7': 26, '8': 28, '9': 25, '0': 29,
+            'ZERO': 29, 'ONE': 18, 'TWO': 19, 'THREE': 20, 'FOUR': 21,
+            'FIVE': 23, 'SIX': 22, 'SEVEN': 26, 'EIGHT': 28, 'NINE': 25,
+            'LEFT_SHIFT': 56,
+            'LEFT_CTRL': 55,
+            'LEFT_ALT': 58,
+            'OSKEY': 55,
+            'DEL': 117,
+            'BACK_SPACE': 51,
+        }
+        self.available = True
+
     def inject(self, event):
         if not self.available:
             return False
+        if self._platform == "Darwin":
+            return self._inject_macos(event)
         event_type = event.get('type')
         if not event_type:
             return False
@@ -176,6 +261,98 @@ class SystemEventInjector:
         except Exception:
             return False
         return sent == 1
+
+    # macOS backend
+
+    def _inject_macos(self, event):
+        if not self._cg.AXIsProcessTrusted():
+            if not self._ax_warning_shown:
+                self._ax_warning_shown = True
+                print(
+                    "[SystemEventInjector] Blender needs Accessibility permission to send "
+                    "mouse/keyboard events. Enable Blender in System Settings > Privacy & "
+                    "Security > Accessibility, then restart Blender."
+                )
+            return False
+        event_type = event.get('type')
+        value = event.get('value', 'PRESS')
+        if event_type == 'MOUSEMOVE':
+            return self._mac_mouse_move(int(event.get('dx', 0)), int(event.get('dy', 0)))
+        if event_type in {'LEFTMOUSE', 'RIGHTMOUSE'}:
+            return self._mac_mouse_button(event_type, value)
+        if event_type in {'WHEELUPMOUSE', 'WHEELDOWNMOUSE'}:
+            return self._mac_mouse_wheel(1 if event_type == 'WHEELUPMOUSE' else -1)
+        return self._mac_key_event(event_type, value)
+
+    def _mac_cursor_location(self):
+        ref = self._cg.CGEventCreate(None)
+        if not ref:
+            return self._CGPoint(0.0, 0.0)
+        try:
+            return self._cg.CGEventGetLocation(ref)
+        finally:
+            self._cf.CFRelease(ref)
+
+    def _mac_post(self, ref):
+        if not ref:
+            return False
+        try:
+            # Apply held modifiers explicitly so chords like Shift+X are seen as such.
+            self._cg.CGEventSetFlags(ref, self._mac_flags)
+            self._cg.CGEventPost(self._kCGHIDEventTap, ref)
+        finally:
+            self._cf.CFRelease(ref)
+        return True
+
+    def _mac_mouse_move(self, dx, dy):
+        if dx == 0 and dy == 0:
+            return True
+        location = self._mac_cursor_location()
+        target = self._CGPoint(location.x + dx, location.y + dy)
+        if 'LEFTMOUSE' in self._mac_held_buttons:
+            event_kind, button = self._kCGEventLeftMouseDragged, self._kCGMouseButtonLeft
+        elif 'RIGHTMOUSE' in self._mac_held_buttons:
+            event_kind, button = self._kCGEventRightMouseDragged, self._kCGMouseButtonRight
+        else:
+            event_kind, button = self._kCGEventMouseMoved, self._kCGMouseButtonLeft
+        ref = self._cg.CGEventCreateMouseEvent(None, event_kind, target, button)
+        if ref:
+            self._cg.CGEventSetIntegerValueField(ref, self._kCGMouseEventDeltaX, dx)
+            self._cg.CGEventSetIntegerValueField(ref, self._kCGMouseEventDeltaY, dy)
+        return self._mac_post(ref)
+
+    def _mac_mouse_button(self, button, value):
+        pressed = value == 'PRESS'
+        if button == 'LEFTMOUSE':
+            event_kind = self._kCGEventLeftMouseDown if pressed else self._kCGEventLeftMouseUp
+            cg_button = self._kCGMouseButtonLeft
+        else:
+            event_kind = self._kCGEventRightMouseDown if pressed else self._kCGEventRightMouseUp
+            cg_button = self._kCGMouseButtonRight
+        if pressed:
+            self._mac_held_buttons.add(button)
+        else:
+            self._mac_held_buttons.discard(button)
+        ref = self._cg.CGEventCreateMouseEvent(None, event_kind, self._mac_cursor_location(), cg_button)
+        return self._mac_post(ref)
+
+    def _mac_mouse_wheel(self, lines):
+        ref = self._cg.CGEventCreateScrollWheelEvent2(None, self._kCGScrollEventUnitLine, 1, lines, 0, 0)
+        return self._mac_post(ref)
+
+    def _mac_key_event(self, key, value):
+        key_code = self._vk_from_key(key)
+        if key_code is None:
+            return False
+        key_down = value != 'RELEASE'
+        flag = self._mac_modifier_flags.get(key_code)
+        if flag is not None:
+            if key_down:
+                self._mac_flags |= flag
+            else:
+                self._mac_flags &= ~flag
+        ref = self._cg.CGEventCreateKeyboardEvent(None, key_code, key_down)
+        return self._mac_post(ref)
 
 
 __all__ = ["SystemEventInjector"]
