@@ -72,6 +72,8 @@ BUTTON_ACTION_ITEMS: List[Tuple[str, str, str, int]] = [
     ("ZERO_KEY", "Enter 0", "Send the 0 key", 41),
     ("MOUSE_WHEEL_UP", "Mouse Wheel Up", "Scroll up", 42),
     ("MOUSE_WHEEL_DOWN", "Mouse Wheel Down", "Scroll down", 43),
+    ("VIEWPORT_MOVE_UP", "Viewport Move Up", "Move the viewport along world +Z while held", 44),
+    ("VIEWPORT_MOVE_DOWN", "Viewport Move Down", "Move the viewport along world -Z while held", 45),
 ]
 
 STICK_MODE_ITEMS: List[Tuple[str, str, str, int]] = [
@@ -87,6 +89,7 @@ COMBINED_AXIS_ACTION_ITEMS: List[Tuple[str, str, str, int]] = [
     ("PAN_VIEW", "Pan", "Pan the viewport", 2),
     ("ROTATE_VIEW", "Rotate", "Orbit the viewport", 3),
     ("ORBIT_SELECTED", "Orbit", "Orbit around the selection", 4),
+    ("MOVE_WORLD_PLANE", "Move in World Horizontal Plane", "Move relative to the view heading, constrained to world XY", 5),
 ]
 
 SEPARATE_AXIS_ACTION_ITEMS: List[Tuple[str, str, str, int]] = [
@@ -99,6 +102,10 @@ SEPARATE_AXIS_ACTION_ITEMS: List[Tuple[str, str, str, int]] = [
     ("ORBIT_LR", "Orbit Left/Right", "Orbit around the selection horizontally", 6),
     ("ORBIT_UD", "Orbit Up/Down", "Orbit around the selection vertically", 7),
     ("ZOOM_VIEW", "Zoom", "Zoom the view in and out", 8),
+    ("MOVE_WORLD_LR", "Move in World Plane Left/Right", "Move sideways in world XY, ignoring view pitch", 9),
+    ("MOVE_WORLD_FB", "Move in World Plane Forward/Back", "Move forward/backward in world XY, ignoring view pitch", 10),
+    ("VIEWPORT_MOVE_UP", "Viewport Move Up", "Move the viewport along world +Z", 11),
+    ("VIEWPORT_MOVE_DOWN", "Viewport Move Down", "Move the viewport along world -Z", 12),
 ]
 
 def _make_label_dict(items: List[Tuple[str, str, str, int]]) -> Dict[str, str]:
@@ -131,6 +138,14 @@ def format_separate_axis_label(identifier: str) -> str:
 
 
 class GamepadAxisSettings(PropertyGroup):
+    world_move_speed: FloatProperty(
+        name="World Move Speed", description="World-plane and world-Z axis movement in Blender units per second",
+        min=0.0, max=100.0, default=2.0,
+    )
+    world_move_sensitivity: FloatProperty(
+        name="World Move Sensitivity", description="Sensitivity multiplier for world movement axes",
+        min=0.0, max=10.0, default=1.0,
+    )
     stick_mode: EnumProperty(
         name="Stick Mode",
         items=STICK_MODE_ITEMS,
@@ -255,6 +270,26 @@ class GamepadSideSettings(PropertyGroup):
     controller_button_rightstick_extra: StringProperty(name="Target Mode", description="Target mode for temporary mode shift", default="")
     controller_button_rightshoulder: EnumProperty(items=BUTTON_ACTION_ITEMS, name="Right Shoulder", default='NONE')
     controller_button_rightshoulder_extra: StringProperty(name="Target Mode", description="Target mode for temporary mode shift", default="")
+    trigger_mode: EnumProperty(
+        name="Trigger Mode",
+        items=[('BUTTON', "Button", "Use the existing button mapping", 0),
+               ('ANALOG', "Analog", "Use pressure for continuous viewport navigation", 1)],
+        default='BUTTON',
+    )
+    trigger_axis_action: EnumProperty(
+        name="Analog Action", items=SEPARATE_AXIS_ACTION_ITEMS, default='ZOOM_VIEW',
+    )
+    trigger_sensitivity: FloatProperty(
+        name="Sensitivity", description="Multiplier for analog trigger navigation speed",
+        min=0.0, max=10.0, default=1.0,
+    )
+    trigger_deadzone: FloatProperty(
+        name="Dead Zone", description="Ignore pressure below this value and rescale the remaining range",
+        min=0.0, max=0.99, default=0.05,
+    )
+    trigger_invert: BoolProperty(
+        name="Invert", description="Reverse analog navigation direction", default=False,
+    )
     trigger_action: EnumProperty(items=BUTTON_ACTION_ITEMS, name="Trigger", default='NONE')
     trigger_extra: StringProperty(name="Target Mode", description="Target mode for temporary mode shift", default="")
     axis: PointerProperty(type=GamepadAxisSettings)
@@ -277,6 +312,11 @@ def _on_mode_name_update(self, _context):
 
 
 class GamepadModeSettings(PropertyGroup):
+    viewport_move_speed: FloatProperty(
+        name="Viewport Vertical Speed",
+        description="World Z viewport movement speed in Blender units per second",
+        min=0.0, max=100.0, default=2.0,
+    )
     name: StringProperty(name="Name", default="Mode", update=_on_mode_name_update)
     previous_name: StringProperty(name="Previous Name", default="Mode", options={'HIDDEN', 'SKIP_SAVE'})
     use_mode: BoolProperty(

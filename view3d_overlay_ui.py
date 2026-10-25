@@ -153,10 +153,12 @@ def _build_control_labels(mode) -> Dict[str, str]:
     left = mode.left_side
     right = mode.right_side
     return {
-        "L2": format_action_label(left.trigger_action),
+        "L2": (format_separate_axis_label(left.trigger_axis_action) + (" (-)" if left.trigger_invert else " (+)"))
+              if left.trigger_mode == 'ANALOG' else format_action_label(left.trigger_action),
         "L1": format_action_label(left.controller_button_leftshoulder),
         "L3": format_action_label(left.controller_button_leftstick),
-        "R2": format_action_label(right.trigger_action),
+        "R2": (format_separate_axis_label(right.trigger_axis_action) + (" (-)" if right.trigger_invert else " (+)"))
+              if right.trigger_mode == 'ANALOG' else format_action_label(right.trigger_action),
         "R1": format_action_label(right.controller_button_rightshoulder),
         "R3": format_action_label(right.controller_button_rightstick),
         "SHARE": format_action_label(mode.controller_button_back),

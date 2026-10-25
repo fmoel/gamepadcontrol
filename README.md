@@ -70,6 +70,70 @@ BCL - Blender Controller Link
 
 ## Known Issues
 
+### Analog LT / RT navigation
+
+In Preferences > Input > Gamepad, expand a mode and set each trigger's
+Mode to **Analog**. Select **Zoom**, Move (dolly), horizontal/vertical Pan,
+local Rotate, or horizontal/vertical Orbit. Button mode remains the default
+and preserves existing mappings, including mouse wheel emulation.
+
+For Xbox zoom, set both triggers to Analog / Zoom, enable **Invert** on LT,
+and leave it disabled on RT. LT zooms out and RT zooms in. Start with
+Sensitivity **0.35** and Dead Zone **0.05** on both; adjust to taste.
+Pressure above the dead zone is rescaled continuously to the full range.
+Sensitivity is independent of stick speeds. Invert reverses the direction
+for every analog action. Both triggers work independently and may have
+different actions. Equal opposing zoom pressure cancels away from the
+minimum view distance.
+
+Analog actions only change RegionView3D navigation state and do not send
+mouse wheel, mouse button, or transform events. Starting analog navigation
+in camera view leaves camera view for perspective, including when Lock
+Camera to View is enabled, so the scene camera is not moved. Trigger
+settings are included in the existing JSON import/export system and the
+overlay shows the analog action and direction.
+
+Regression tests use actual Blender RNA and viewport data. With the bundled
+SDL dependencies installed, run:
+
+```sh
+blender --background --factory-startup --python-exit-code 1 --python tests/test_analog_triggers.py
+```
+
+These automated tests do not replace physical controller acceptance tests.
+
+### World-plane stick movement and analog world Z
+
+For ground-plane navigation, set a stick to **Combined Axis / Move in World
+Horizontal Plane**. Right/left moves sideways and up/down moves forward/backward
+in world XY relative to the view heading. View pitch does not turn this into
+vertical movement. A vertical view remains usable: heading comes from the view's
+right vector projected onto XY, with a forward-vector fallback when right is
+vertical. World Z stays unchanged. Screen-plane **Pan** remains a separate action.
+
+Configure **World Move Speed** (units/second), **World Move Sensitivity**, X/Y
+dead zones and X/Y inversion. Each dead zone rescales the remaining axis travel;
+diagonal input is capped at the same maximum speed as straight movement.
+Separate Axis mode also offers world-plane left/right and forward/back actions.
+
+**Viewport Move Up** and **Viewport Move Down** are available for analog triggers
+as well as buttons. Select Analog and the desired action for LT/RT; pressure,
+trigger sensitivity, dead zone and inversion control movement along world Z.
+Analog trigger Z uses the mode's **Viewport Vertical Speed**, shared with the
+held button actions. Invert reverses the chosen action, so disable it when
+assigning Down if you want that trigger to move downward. Existing Zoom trigger
+assignments and all previous stick modes retain their behavior. These options
+are saved by the existing JSON import/export system.
+
+### Hold buttons to move along world Z
+
+Assign **Viewport Move Up** and **Viewport Move Down** to any button (for example
+RB and LB). The view moves along world +Z or -Z for as long as the button is held
+and stops on release. **Viewport Vertical Speed**, configured per mode, is in
+Blender units per second. Both buttons together cancel. Stick navigation and
+analog triggers continue to work at the same time. Only the viewport location
+changes; camera view is exited before moving, and scene objects are untouched.
+
 ### Window Control Freeze (Currently Unresolvable)
 
 When using mouse button actions mapped to gamepad triggers (e.g., left trigger for LEFTMOUSE), clicking on Blender's window controls (titlebar, minimize, maximize, close) or dragging the window may cause the interface to freeze.

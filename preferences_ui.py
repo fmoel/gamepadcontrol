@@ -238,6 +238,7 @@ def draw_preferences_ui(prefs: CL_GamepadPreferences, layout, context) -> None:
         col.prop_search(mode, "controller_button_start_extra", prefs, "modes", text="Temporary Mode", icon='NONE')
         col.separator()
     
+    col.prop(mode, "viewport_move_speed")
     columns = box.row()
     left_col = columns.column()
     right_col = columns.column()
@@ -277,6 +278,14 @@ def _draw_side(layout, side: GamepadSideSettings, title: str) -> None:
         ]
     
     for attr, label in button_fields:
+        if attr == "trigger_action":
+            col.prop(side, "trigger_mode", text=label + " Mode")
+            if side.trigger_mode == 'ANALOG':
+                col.prop(side, "trigger_axis_action", text=label + " Action")
+                col.prop(side, "trigger_sensitivity")
+                col.prop(side, "trigger_deadzone")
+                col.prop(side, "trigger_invert")
+                continue
         # Show target mode selector if action is TEMP_MODE_SHIFT
         action_value = getattr(side, attr, 'NONE')
         if action_value == 'TEMP_MODE_SHIFT':
@@ -314,6 +323,7 @@ def _draw_side(layout, side: GamepadSideSettings, title: str) -> None:
         axis_box.separator()
         x_col = axis_box.column(align=True)
         x_col.prop(axis, "axis_x_action", text="X Axis")
+        x_col.prop(axis, "axis_deadzone_x", text="X Deadzone")
         _draw_axis_action_settings(x_col, axis, axis.axis_x_action)
         y_col = axis_box.column(align=True)
         y_col.prop(axis, "axis_y_action", text="Y Axis")
@@ -328,6 +338,9 @@ def _draw_combined_action_settings(layout, axis: GamepadAxisSettings) -> None:
     action = axis.combined_action
     if action == 'MOUSE_POINTER':
         layout.prop(axis, "cursor_speed", text="Cursor Speed")
+    elif action == 'MOVE_WORLD_PLANE':
+        layout.prop(axis, "world_move_speed")
+        layout.prop(axis, "world_move_sensitivity")
     elif action == 'PAN_VIEW':
         layout.prop(axis, "pan_speed", text="Pan Speed")
     elif action == 'ROTATE_VIEW':
@@ -337,7 +350,10 @@ def _draw_combined_action_settings(layout, axis: GamepadAxisSettings) -> None:
 
 
 def _draw_axis_action_settings(layout, axis: GamepadAxisSettings, action_id: str) -> None:
-    if action_id == 'MOVE_VIEW':
+    if action_id in {'MOVE_WORLD_LR', 'MOVE_WORLD_FB', 'VIEWPORT_MOVE_UP', 'VIEWPORT_MOVE_DOWN'}:
+        layout.prop(axis, "world_move_speed")
+        layout.prop(axis, "world_move_sensitivity")
+    elif action_id == 'MOVE_VIEW':
         layout.prop(axis, "dolly_speed", text="Move Speed")
     elif action_id in {'PAN_LR', 'PAN_UD'}:
         layout.prop(axis, "pan_speed", text="Pan Speed")

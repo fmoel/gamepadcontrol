@@ -16,6 +16,7 @@
 # pyright: reportInvalidTypeForm=false
 
 import math
+import time
 
 import bpy
 from mathutils import Vector, Quaternion
@@ -64,6 +65,8 @@ class ControllerActionExecutor:
     CARDINAL_ATTRS = ("up", "down", "left", "right", "dir_right_action")
 
     HOLDABLE_ACTIONS = {"MOUSE_LEFT", "MOUSE_RIGHT"}
+    HELD_VIEWPORT_ACTIONS = {'VIEWPORT_MOVE_UP': 1.0, 'VIEWPORT_MOVE_DOWN': -1.0}
+    WORLD_AXIS_ACTIONS = {'MOVE_WORLD_LR', 'MOVE_WORLD_FB', 'VIEWPORT_MOVE_UP', 'VIEWPORT_MOVE_DOWN'}
 
     DEFAULT_AXIS_DEADZONE = 0.1
     DEFAULT_CURSOR_SPEED = 0.5
@@ -75,6 +78,8 @@ class ControllerActionExecutor:
     DEFAULT_ZOOM_SPEED = 0.05
 
     def __init__(self):
+        self._analog_last_time = None
+        self._analog_frame_scale = 1.0
         self.button_state = {}
         self.axis_state = {}
         self.active_mouse_buttons = set()
@@ -210,6 +215,11 @@ class ControllerActionExecutor:
             self._last_view3d_area = view3d_area
 
     def apply(self, context, reader):
+        now = time.monotonic()
+        elapsed = 1.0 / 60.0 if self._analog_last_time is None else now - self._analog_last_time
+        self._analog_last_time = now
+        # Bound pauses (file dialogs, window dragging, reconnects) to avoid jumps.
+        self._analog_frame_scale = max(0.0, min(elapsed, 0.1)) * 60.0
         self._reader = reader
         
         # Verify that mouse buttons we think are pressed are actually still pressed
@@ -294,6 +304,9 @@ class ControllerActionExecutor:
         if action == 'NONE' or not button:
             return
         current = bool(self._reader.get(button, False))
+        if action in self.HELD_VIEWPORT_ACTIONS:
+            self._process_held_viewport_action(mode, action, current)
+            return
         if action in self.MODE_SWITCH_ACTIONS:
             extra_data = getattr(side, f"{button}_extra", "") if side else ""
             self._process_mode_switch_button(action, button, current, extra_data)
@@ -312,10 +325,18 @@ class ControllerActionExecutor:
             self._execute_button_release(action)
 
     def _process_trigger(self, trigger, mode, action, side=None):
+        if side and getattr(side, "trigger_mode", 'BUTTON') == 'ANALOG':
+            if self.button_state.pop(self._state_key(mode, trigger), False):
+                self._execute_button_release(action)
+            self._process_analog_trigger(trigger, side, mode)
+            return
         if action == 'NONE' or not trigger:
             return
         value = self._reader.get(trigger, 0.0)
         pressed = value > 0.45
+        if action in self.HELD_VIEWPORT_ACTIONS:
+            self._process_held_viewport_action(mode, action, pressed)
+            return
         state_key = self._state_key(mode, trigger)
         previous = self.button_state.get(state_key, False)
         if pressed == previous:
@@ -335,6 +356,65 @@ class ControllerActionExecutor:
                     self.active_mouse_buttons.discard('LEFTMOUSE')
                 elif action == 'MOUSE_RIGHT' and 'RIGHTMOUSE' in self.active_mouse_buttons:
                     self.active_mouse_buttons.discard('RIGHTMOUSE')
+
+    def _process_held_viewport_action(self, mode, action, pressed):
+        if not pressed:
+            return
+        amount = self.HELD_VIEWPORT_ACTIONS[action] * mode.viewport_move_speed * self._analog_frame_scale / 60.0
+        self._move_world_z(amount)
+
+    def _move_world_z(self, amount):
+        if amount == 0.0:
+            return
+        _, area = self._find_view3d_area()
+        if area is None:
+            return
+        rv3d = area.spaces.active.region_3d
+        if rv3d is None:
+            return
+        if rv3d.view_perspective == 'CAMERA':
+            rv3d.view_perspective = 'PERSP'
+        rv3d.view_location = rv3d.view_location + Vector((0.0, 0.0, amount))
+        area.tag_redraw()
+
+    def _process_analog_trigger(self, trigger, side, mode=None):
+        action = side.trigger_axis_action
+        if not trigger or action == 'NONE':
+            return
+        pressure = self._reader.get(trigger, 0.0)
+        if not math.isfinite(pressure):
+            return
+        pressure = self._clamp(pressure, 0.0, 1.0)
+        deadzone = self._clamp(side.trigger_deadzone, 0.0, 0.99)
+        value = max(0.0, (pressure - deadzone) / (1.0 - deadzone))
+        value *= side.trigger_sensitivity * self._analog_frame_scale
+        if side.trigger_invert:
+            value = -value
+        if value == 0.0:
+            return
+        if action in self.WORLD_AXIS_ACTIONS:
+            # Pressure already includes sensitivity and elapsed-frame scaling.
+            # Z shares the button speed; XY uses the navigation default of 2 units/s.
+            settings = mode if action in self.HELD_VIEWPORT_ACTIONS and mode is not None else side
+            self._execute_world_axis_action(settings, action, value, 1.0 / 60.0)
+            return
+        window, area = self._find_view3d_area()
+        if area is None:
+            return
+        rv3d = area.spaces.active.region_3d
+        # Navigate the viewport even when Lock Camera to View is enabled.
+        # Leave camera view before touching RegionView3D; never invoke camera operators.
+        if rv3d is None:
+            return
+        if rv3d.view_perspective == 'CAMERA':
+            rv3d.view_perspective = 'PERSP'
+        if action == 'ZOOM_VIEW':
+            # Exponential distance change is reversible and independent of poll rate.
+            self._zoom_view(-math.expm1(-value * self.DEFAULT_ZOOM_SPEED))
+        else:
+            # Use the executor's navigation defaults, independent of stick speeds.
+            self._execute_separate_axis_action(side, action, value)
+        area.tag_redraw()
 
     def _process_axes(self, axis_keys, mode, axis_settings):
         if not axis_settings or not axis_keys:
@@ -358,6 +438,15 @@ class ControllerActionExecutor:
     def _apply_combined_axis(self, axis_settings, x, y):
         action = axis_settings.combined_action
         if action == 'NONE':
+            return
+        if action == 'MOVE_WORLD_PLANE':
+            x = self._rescale_world_axis(x, axis_settings.axis_deadzone_x)
+            y = self._rescale_world_axis(y, axis_settings.axis_deadzone_y)
+            magnitude = math.hypot(x, y)
+            if magnitude > 1.0:
+                x, y = x / magnitude, y / magnitude
+            amount = axis_settings.world_move_speed * axis_settings.world_move_sensitivity * self._analog_frame_scale / 60.0
+            self._move_world_plane(x * amount, y * amount)
             return
         magnitude = math.sqrt(x * x + y * y)
         threshold = max(self._combined_deadzone(axis_settings), self.DEFAULT_AXIS_DEADZONE)
@@ -384,13 +473,19 @@ class ControllerActionExecutor:
         y_threshold = max(getattr(axis_settings, "axis_deadzone_y", 0.0), self.DEFAULT_AXIS_DEADZONE)
         x_value = x if abs(x) >= x_threshold else 0.0
         y_value = y if abs(y) >= y_threshold else 0.0
+        if axis_settings.axis_x_action in self.WORLD_AXIS_ACTIONS:
+            x_value = self._rescale_world_axis(x, axis_settings.axis_deadzone_x)
+        if axis_settings.axis_y_action in self.WORLD_AXIS_ACTIONS:
+            y_value = self._rescale_world_axis(y, axis_settings.axis_deadzone_y)
         self._execute_separate_axis_action(axis_settings, axis_settings.axis_x_action, x_value)
         self._execute_separate_axis_action(axis_settings, axis_settings.axis_y_action, y_value)
 
     def _execute_separate_axis_action(self, axis_settings, action, value):
         if action == 'NONE' or abs(value) < 1e-6:
             return
-        if action == 'MOVE_VIEW':
+        if action in self.WORLD_AXIS_ACTIONS:
+            self._execute_world_axis_action(axis_settings, action, value, self._analog_frame_scale / 60.0)
+        elif action == 'MOVE_VIEW':
             dolly_speed = getattr(axis_settings, "dolly_speed", self.DEFAULT_DOLLY_SPEED)
             self._dolly_view(-value, dolly_speed)
         elif action == 'PAN_LR':
@@ -415,6 +510,51 @@ class ControllerActionExecutor:
             orbit_speed = getattr(axis_settings, "orbit_speed", self.DEFAULT_ORBIT_SPEED)
             self._orbit_view(yaw=-value * orbit_speed)
 
+    @staticmethod
+    def _rescale_world_axis(value, deadzone):
+        if not math.isfinite(value):
+            return 0.0
+        value = max(-1.0, min(1.0, value))
+        deadzone = max(0.0, min(1.0, deadzone))
+        if deadzone >= 1.0 or abs(value) <= deadzone:
+            return 0.0
+        return math.copysign((abs(value) - deadzone) / (1.0 - deadzone), value)
+
+    def _execute_world_axis_action(self, settings, action, value, seconds):
+        speed = getattr(settings, 'world_move_speed', getattr(settings, 'viewport_move_speed', 2.0))
+        amount = value * seconds * speed * getattr(settings, 'world_move_sensitivity', 1.0)
+        if action in self.HELD_VIEWPORT_ACTIONS:
+            self._move_world_z(amount * self.HELD_VIEWPORT_ACTIONS[action])
+        elif action == 'MOVE_WORLD_LR':
+            self._move_world_plane(amount, 0.0)
+        elif action == 'MOVE_WORLD_FB':
+            self._move_world_plane(0.0, amount)
+
+    def _move_world_plane(self, right_amount, forward_amount):
+        if right_amount == 0.0 and forward_amount == 0.0:
+            return
+        _, area = self._find_view3d_area()
+        if area is None:
+            return
+        rv3d = area.spaces.active.region_3d
+        if rv3d is None:
+            return
+        # Project the view's right vector onto world XY. Unlike projected forward,
+        # this is stable while pitching through a straight-down/up view.
+        right = rv3d.view_rotation @ Vector((1.0, 0.0, 0.0))
+        right.z = 0.0
+        if right.length_squared < 1e-10:
+            # A 90-degree roll can make view-right vertical; forward then defines XY.
+            forward = rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
+            forward.z = 0.0
+            right = forward.cross(Vector((0.0, 0.0, 1.0)))
+        right.normalize()
+        forward = Vector((-right.y, right.x, 0.0))
+        if rv3d.view_perspective == 'CAMERA':
+            rv3d.view_perspective = 'PERSP'
+        rv3d.view_location = rv3d.view_location + right * right_amount + forward * forward_amount
+        area.tag_redraw()
+
     def _apply_button_axis(self, mode, axis_settings, x, y, axis_key, include_diagonals):
         combined_deadzone = self._combined_deadzone(axis_settings)
         button_deadzone = getattr(axis_settings, "button_deadzone", 0.6)
@@ -431,6 +571,9 @@ class ControllerActionExecutor:
             # Use axis_key + direction for unique state key (e.g., controller_axis_leftx_up)
             state_key = self._state_key(mode, f"{axis_key}_{name}")
             active = allowed and direction == name and action != 'NONE'
+            if action in self.HELD_VIEWPORT_ACTIONS:
+                self._process_held_viewport_action(mode, action, active)
+                continue
             previous = self.axis_state.get(state_key, False)
             if active == previous:
                 continue
@@ -991,6 +1134,8 @@ class ControllerActionExecutor:
 
 
     def reset(self, context=None):
+        self._analog_last_time = None
+        self._analog_frame_scale = 1.0
         self._flush_inputs()
         self.cursor_owner = 'controller'
         self._last_mouse_event = None
